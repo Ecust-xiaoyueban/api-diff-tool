@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>系统重构 API 比对工作台</title>
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar shadow-sm">
+        <div class="nav-brand">🛠️ API Diff 工具平台</div>
+        <button id="saveWorkspaceBtn" class="btn-secondary shadow-sm">💾 保存所有配置到本地</button>
+    </nav>
+
+    <div class="main-layout">
+        <div class="sidebar panel shadow-md">
+            <div class="workspace-manager">
+                <div class="workspace-header"><span>🏢 当前测试组 (Workspace)</span></div>
+                <div class="d-flex gap-1 mt-1">
+                    <select id="groupSelect" class="form-select w-100" onchange="switchGroup()"></select>
+                    <button onclick="openGroupModal()" class="btn-primary" style="padding: 0 12px;" title="新建测试组">➕</button>
+                </div>
+            </div>
+            <div class="sidebar-header flex-column gap-1">
+                <div class="d-flex justify-between w-100 align-items-center">
+                    <span class="font-bold">📑 测试案例</span>
+                    <button onclick="addCase()" class="btn-sm btn-outline-primary">+ 新增</button>
+                </div>
+                <div class="batch-controls d-flex justify-between align-items-center">
+                    <label class="checkbox-label"><input type="checkbox" id="selectAll" onchange="toggleSelectAll()"> 全选</label>
+                    <button onclick="openBatchModal()" class="btn-sm btn-success">⚙️ 批量执行</button>
+                </div>
+            </div>
+            <div class="case-list" id="caseList"></div>
+        </div>
+
+        <div class="content d-flex flex-column gap-1">
+            <div class="panel global-config shadow-sm">
+                <div class="config-title">⚙️ 当前组全局配置</div>
+                <div class="form-row">
+                    <div class="form-group"><label>🔵 老系统前缀</label><input type="text" id="oldPrefix" placeholder="http://10.x.x.1:8080"></div>
+                    <div class="form-group"><label>🟢 新系统前缀</label><input type="text" id="newPrefix" placeholder="http://10.x.x.2:9090"></div>
+                    <div class="form-group"><label class="text-muted">🚫 全局忽略字段</label><input type="text" id="ignorePaths" placeholder="root['traceId']"></div>
+                </div>
+            </div>
+
+            <div class="panel case-editor shadow-sm" id="caseEditor" style="display: none;">
+                <div class="content-header d-flex justify-between align-items-center">
+                    <input type="text" id="caseName" class="case-name-input" placeholder="案例名称">
+                    <button id="runSingleBtn" class="btn-primary shadow-sm">▶️ 执行当前案例</button>
+                </div>
+
+                <div class="split-view">
+                    <div class="split-pane">
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 0 0 110px;"><label>Method</label><select id="method" class="form-select"><option value="POST">POST</option><option value="GET">GET</option></select></div>
+                            <div class="form-group" style="flex: 1;"><label>交易 URI</label><input type="text" id="uri" placeholder="/api/v1/trade/query"></div>
+                        </div>
+
+                        <div class="form-group mb-1">
+                            <label style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+                                高级设置
+                                <label class="checkbox-label" style="margin:0; font-size: 0.75rem; background: #f1f5f9; padding: 4px 8px; border-radius: 4px; color: #475569; border: 1px solid #cbd5e1;">
+                                    <input type="checkbox" id="isCaseIgnore" onchange="toggleCaseIgnore()"> 🔕 开启案例专属忽略字段
+                                </label>
+                            </label>
+                            <input type="text" id="caseIgnorePaths" class="ide-input" style="display: none; border-color: #94a3b8; background: #f8fafc;" placeholder="例如: root['taskNo'] (多个用逗号分隔)">
+                        </div>
+
+                        <div class="form-group">
+                            <div class="label-row">
+                                <label>Headers</label>
+                                <button class="btn-action" onclick="formatInput('headers')">🪄 格式化</button>
+                            </div>
+                            <textarea id="headers" class="ide-input textarea-sm"></textarea>
+                        </div>
+
+                        <div class="form-group flex-1 d-flex flex-column">
+                            <div class="label-row">
+                                <label style="display: flex; align-items: center; gap: 10px;">
+                                    Payload 报文
+                                    <label class="checkbox-label" style="margin:0; font-size: 0.75rem; background: #e0e7ff; padding: 2px 8px; border-radius: 4px; color: #4338ca;">
+                                        <input type="checkbox" id="isDiffPayload" onchange="toggleDiffPayload()"> 🔀 开启差异化报文
+                                    </label>
+                                </label>
+                                <button class="btn-action" onclick="formatAllPayloads()">🪄 格式化全部</button>
+                            </div>
+                            <div class="d-flex flex-column flex-1">
+                                <span id="oldPayloadLabel" style="font-size: 0.7rem; color: #3b82f6; display: none; margin-bottom: 2px;">🔵 发往老系统</span>
+                                <textarea id="payload" class="ide-input textarea-lg flex-1" style="min-height: 100px;"></textarea>
+                            </div>
+                            <div id="newPayloadContainer" class="d-flex flex-column flex-1 mt-1" style="display: none;">
+                                <span style="font-size: 0.7rem; color: #10b981; margin-bottom: 2px;">🟢 发往新系统</span>
+                                <textarea id="payloadNew" class="ide-input textarea-lg flex-1" style="min-height: 100px; border-left: 3px solid #10b981;"></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="split-pane result-area shadow-inner">
+                        <label class="text-danger d-flex align-items-center">📊 差异分析板 <span id="statusBadge" class="badge"></span></label>
+                        <div id="diffResult" class="diff-visual-container">等待执行...</div>
+
+                        <div class="git-diff-container mt-1 shadow-sm flex-1 d-flex flex-column">
+                            <div class="git-diff-header d-flex">
+                                <div class="flex-1">🔵 老系统原始响应 (Old)</div>
+                                <div class="flex-1">🟢 新系统原始响应 (New)</div>
+                            </div>
+                            <div id="unifiedGitDiff" class="git-view flex-1"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="panel empty-state shadow-sm" id="emptyState">👈 请在左侧选择或新建一个测试案例</div>
+        </div>
+    </div>
+
+    <div id="groupModal" class="modal-overlay" style="display: none;"><div class="modal shadow-xl"><h3 class="modal-title">🏢 新建测试组</h3><div class="form-group mt-1"><label>组名称</label><input type="text" id="newGroupName" placeholder="例如：核心交易测试组"></div><div class="d-flex justify-between mt-2"><button class="btn-secondary" style="width: 48%;" onclick="closeGroupModal()">取消</button><button class="btn-primary" style="width: 48%;" onclick="confirmCreateGroup()">✅ 创建</button></div></div></div>
+    <div id="batchModal" class="modal-overlay" style="display: none;"><div class="modal shadow-xl"><h3 class="modal-title">⚙️ 高级批量执行配置</h3><div class="form-group mt-1"><label>已勾选数量</label><input type="text" id="selectedCount" disabled class="bg-light disabled-input"></div><div class="form-group"><label>⏳ 执行间隔 (毫秒)</label><input type="number" id="batchDelay" value="500" min="0"></div><div class="form-group mt-1"><label class="checkbox-label text-danger" style="background: #fef2f2; padding: 10px; border-radius: 6px; border: 1px solid #fca5a5;"><input type="checkbox" id="stopOnError" checked> ❌ 失败即熔断</label></div><div class="d-flex justify-between mt-2"><button class="btn-secondary" style="width: 48%;" onclick="closeBatchModal()">取消</button><button class="btn-success" style="width: 48%;" onclick="runBatch()">🚀 开始跑批</button></div></div></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
