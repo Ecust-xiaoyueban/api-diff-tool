@@ -10,12 +10,14 @@ import httpx
 from deepdiff import DeepDiff
 import uvicorn
 
-app = FastAPI(title="API Diff Tool (Git Edition)")
+app = FastAPI(title="API Diff Tool (Team Edition)")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-WORKSPACE_FILE = "workspace.json"
+# 🌟 新增：工作区隔离存储目录
+WORKSPACE_DIR = "workspaces"
+os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 
 class CompareRequest(BaseModel):
@@ -36,19 +38,38 @@ async def serve_ui(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.get("/api/workspace")
-async def get_workspace():
-    if os.path.exists(WORKSPACE_FILE):
-        with open(WORKSPACE_FILE, "r", encoding="utf-8") as f:
+# 🌟 接口1：获取所有可用的组列表（不含具体报文，只做导航）
+@app.get("/api/groups")
+async def get_groups():
+    groups = []
+    for filename in os.listdir(WORKSPACE_DIR):
+        if filename.endswith(".json"):
+            filepath = os.path.join(WORKSPACE_DIR, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    groups.append({"id": data.get("id"), "name": data.get("name")})
+            except Exception:
+                continue
+    # 按创建时间/ID排序
+    return sorted(groups, key=lambda x: x["id"])
+
+
+# 🌟 接口2：获取特定组的完整数据
+@app.get("/api/workspace/{group_id}")
+async def get_workspace(group_id: str):
+    filepath = os.path.join(WORKSPACE_DIR, f"{group_id}.json")
+    if os.path.exists(filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
             return json.load(f)
-    return {"groups": [
-        {"id": "g1", "name": "默认工作组", "config": {"oldPrefix": "", "newPrefix": "", "ignorePaths": ""},
-         "cases": []}], "activeGroupId": "g1"}
+    return {}
 
 
-@app.post("/api/workspace")
-async def save_workspace(data: dict):
-    with open(WORKSPACE_FILE, "w", encoding="utf-8") as f:
+# 🌟 接口3：保存特定组的数据（实现文件级隔离）
+@app.post("/api/workspace/{group_id}")
+async def save_workspace(group_id: str, data: dict):
+    filepath = os.path.join(WORKSPACE_DIR, f"{group_id}.json")
+    with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return {"status": "success"}
 
@@ -58,7 +79,6 @@ async def compare_api(req: CompareRequest):
     try:
         headers_dict = json.loads(req.headers) if req.headers.strip() else {}
         payload_old_dict = json.loads(req.payload) if req.payload.strip() else {}
-
         if req.is_diff_payload:
             payload_new_dict = json.loads(req.payload_new) if req.payload_new.strip() else {}
         else:
@@ -85,10 +105,8 @@ async def compare_api(req: CompareRequest):
             new_data = new_res.json() if isinstance(new_res, httpx.Response) and new_res.status_code == 200 else str(
                 new_res)
 
-            # 逻辑比对 (带忽略规则)
             diff = DeepDiff(old_data, new_data, exclude_paths=exclude_paths, ignore_order=True)
 
-            # 文本比对 (Git 视图源数据)
             old_json_str = json.dumps(old_data, indent=2, ensure_ascii=False) if isinstance(old_data,
                                                                                             (dict, list)) else str(
                 old_data)

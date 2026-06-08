@@ -1,84 +1,176 @@
-let appState = { groups: [], activeGroupId: null, activeCaseId: null };
+let appState = {
+    groupsList: [],
+    activeGroupId: localStorage.getItem('diff_active_group_id'),
+    currentGroupData: null,
+    activeCaseId: null,
+    activeScenarioId: null,
+    batchScope: 'global', // 记录跑批范围: 'global' 或 'case'
+    transientResults: {}
+};
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 document.addEventListener('DOMContentLoaded', async () => {
     enableTabIndent('headers'); enableTabIndent('payload'); enableTabIndent('payloadNew');
-    await loadWorkspace();
+    initSyncScroll();
+    await loadInitialData();
 });
 
-async function loadWorkspace() {
-    try {
-        const res = await fetch('/api/workspace');
-        const data = await res.json();
-        if (!data.groups) {
-            appState.groups = [{ id: 'g_default', name: '默认测试组', config: { oldPrefix: data.oldPrefix || "", newPrefix: data.newPrefix || "", ignorePaths: data.ignorePaths || "" }, cases: data.cases || [] }];
-            appState.activeGroupId = 'g_default';
-        } else {
-            appState.groups = data.groups; appState.activeGroupId = data.activeGroupId || data.groups[0].id;
-        }
-        renderGroupSelect(); applyActiveGroup();
-    } catch (e) {
-        appState.groups = [{ id: 'g_init', name: '我的测试组', config: { oldPrefix: "", newPrefix: "", ignorePaths: "" }, cases: [] }];
-        appState.activeGroupId = 'g_init'; renderGroupSelect(); applyActiveGroup();
-    }
+function initSyncScroll() {
+    const unifiedGitDiff = document.getElementById('unifiedGitDiff');
+    // 对于统一表格结构的 Git View，内部自带对齐，仅保留此处占位
 }
 
-function renderGroupSelect() { const sel = document.getElementById('groupSelect'); sel.innerHTML = ''; appState.groups.forEach(g => { const opt = document.createElement('option'); opt.value = g.id; opt.innerText = g.name; if (g.id === appState.activeGroupId) opt.selected = true; sel.appendChild(opt); }); }
+async function loadInitialData() {
+    try {
+        const res = await fetch('/api/groups');
+        appState.groupsList = await res.json();
+        if (appState.groupsList.length === 0) { await createGroupOnServer("默认测试组", 'g_default'); }
+        else {
+            if (!appState.groupsList.find(g => g.id === appState.activeGroupId)) { appState.activeGroupId = appState.groupsList[0].id; }
+            await loadGroupData(appState.activeGroupId);
+        }
+    } catch (e) { console.error("加载失败", e); }
+}
+
+async function loadGroupData(groupId) {
+    try {
+        const res = await fetch(`/api/workspace/${groupId}`);
+        let data = await res.json();
+
+        data.cases.forEach(c => {
+            if (!c.scenarios) {
+                c.scenarios = [{
+                    id: 's_' + Date.now() + Math.floor(Math.random()*1000),
+                    name: '默认场景 1', payload: c.payload || '{\n    \n}', isDiffPayload: c.isDiffPayload || false, payloadNew: c.payloadNew || '{\n    \n}', lastStatus: c.lastStatus || null, selected: true
+                }];
+                delete c.payload; delete c.isDiffPayload; delete c.payloadNew; delete c.lastStatus;
+            }
+        });
+
+        appState.currentGroupData = data;
+        appState.activeGroupId = groupId;
+        localStorage.setItem('diff_active_group_id', groupId);
+        appState.activeCaseId = null; appState.activeScenarioId = null;
+
+        renderGroupSelect(); applyActiveGroup();
+    } catch(e) { alert("加载组数据失败"); }
+}
+
+function renderGroupSelect() { const sel = document.getElementById('groupSelect'); sel.innerHTML = ''; appState.groupsList.forEach(g => { const opt = document.createElement('option'); opt.value = g.id; opt.innerText = g.name; if (g.id === appState.activeGroupId) opt.selected = true; sel.appendChild(opt); }); }
 function openGroupModal() { document.getElementById('newGroupName').value = ''; document.getElementById('groupModal').style.display = 'flex'; document.getElementById('newGroupName').focus(); }
 function closeGroupModal() { document.getElementById('groupModal').style.display = 'none'; }
-function confirmCreateGroup() { const name = document.getElementById('newGroupName').value.trim(); if (!name) return; saveCurrentCase(); saveCurrentGroupConfig(); const newGroup = { id: 'g_' + Date.now(), name: name, config: { oldPrefix: "", newPrefix: "", ignorePaths: "" }, cases: [] }; appState.groups.push(newGroup); appState.activeGroupId = newGroup.id; appState.activeCaseId = null; renderGroupSelect(); applyActiveGroup(); closeGroupModal(); }
-function switchGroup() { saveCurrentCase(); saveCurrentGroupConfig(); appState.activeGroupId = document.getElementById('groupSelect').value; appState.activeCaseId = null; applyActiveGroup(); }
-function getActiveGroup() { return appState.groups.find(g => g.id === appState.activeGroupId); }
+async function confirmCreateGroup() { const name = document.getElementById('newGroupName').value.trim(); if (!name) return; if (appState.currentGroupData) { await saveWorkspaceToServer(false); } const newId = 'g_' + Date.now(); await createGroupOnServer(name, newId); closeGroupModal(); }
+async function createGroupOnServer(name, id) { const newGroupData = { id: id, name: name, config: { oldPrefix: "", newPrefix: "", ignorePaths: "" }, cases: [] }; await fetch(`/api/workspace/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newGroupData) }); appState.groupsList.push({id: id, name: name}); await loadGroupData(id); }
+async function switchGroup() { await saveWorkspaceToServer(false); const newId = document.getElementById('groupSelect').value; document.getElementById('caseList').innerHTML = '<div style="padding:10px;text-align:center;color:#94a3b8;">加载中...</div>'; await loadGroupData(newId); }
 
 function applyActiveGroup() {
-    const group = getActiveGroup();
-    document.getElementById('oldPrefix').value = group.config.oldPrefix; document.getElementById('newPrefix').value = group.config.newPrefix; document.getElementById('ignorePaths').value = group.config.ignorePaths;
+    const group = appState.currentGroupData;
+    document.getElementById('oldPrefix').value = group.config.oldPrefix || ''; document.getElementById('newPrefix').value = group.config.newPrefix || ''; document.getElementById('ignorePaths').value = group.config.ignorePaths || '';
     document.getElementById('emptyState').style.display = 'flex'; document.getElementById('caseEditor').style.display = 'none'; document.getElementById('selectAll').checked = false; renderCaseList();
 }
 
-function saveCurrentGroupConfig() { const group = getActiveGroup(); if (group) { group.config.oldPrefix = document.getElementById('oldPrefix').value; group.config.newPrefix = document.getElementById('newPrefix').value; group.config.ignorePaths = document.getElementById('ignorePaths').value; } }
+function saveCurrentGroupConfig() { if (appState.currentGroupData) { appState.currentGroupData.config.oldPrefix = document.getElementById('oldPrefix').value; appState.currentGroupData.config.newPrefix = document.getElementById('newPrefix').value; appState.currentGroupData.config.ignorePaths = document.getElementById('ignorePaths').value; } }
 
-document.getElementById('saveWorkspaceBtn').addEventListener('click', async () => {
-    saveCurrentCase(); saveCurrentGroupConfig(); const btn = document.getElementById('saveWorkspaceBtn'); btn.innerHTML = "⏳ 保存中...";
-    try { await fetch('/api/workspace', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groups: appState.groups, activeGroupId: appState.activeGroupId }) }); btn.innerHTML = "✅ 保存成功"; setTimeout(() => btn.innerHTML = "💾 保存所有配置到本地", 2000); } catch (e) { alert("保存失败"); btn.innerHTML = "💾 保存所有配置到本地"; }
-});
+async function saveWorkspaceToServer(showAlert = true) {
+    if (!appState.currentGroupData) return;
+    saveCurrentInputs(); saveCurrentGroupConfig();
+    const btn = document.getElementById('saveWorkspaceBtn');
+    if(showAlert) btn.innerHTML = "⏳ 保存中...";
+    try { await fetch(`/api/workspace/${appState.activeGroupId}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(appState.currentGroupData) }); if(showAlert) { btn.innerHTML = "✅ 保存成功"; setTimeout(() => btn.innerHTML = "💾 保存配置到本地", 2000); } } catch (e) { if(showAlert) { alert("保存失败"); btn.innerHTML = "💾 保存配置到本地"; } }
+}
+document.getElementById('saveWorkspaceBtn').addEventListener('click', () => saveWorkspaceToServer(true));
 
 function renderCaseList() {
-    const group = getActiveGroup(); const list = document.getElementById('caseList'); list.innerHTML = '';
-    group.cases.forEach(c => {
+    const list = document.getElementById('caseList'); list.innerHTML = '';
+    appState.currentGroupData.cases.forEach(c => {
         const div = document.createElement('div'); div.className = `case-item ${c.id === appState.activeCaseId ? 'active' : ''}`;
-        let statusIcon = c.lastStatus === 'success' ? '✅' : (c.lastStatus === 'error' ? '❌' : '📝');
-        div.innerHTML = `<input type="checkbox" class="case-select" data-id="${c.id}" ${c.selected ? 'checked' : ''} onclick="event.stopPropagation(); updateSelectAllStatus();"><div class="flex-1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 10px;" onclick="selectCase('${c.id}')"><span class="method-badge">${c.method}</span> ${c.name}</div><div id="status-icon-${c.id}" style="margin-left:auto;">${statusIcon}</div>`;
+        let allSuccess = c.scenarios.length > 0 && c.scenarios.every(s => s.lastStatus === 'success');
+        let anyError = c.scenarios.some(s => s.lastStatus === 'error');
+        let statusEmoji = anyError ? '❌' : (allSuccess ? '✅' : '⏺️');
+        div.innerHTML = `<input type="checkbox" class="case-select" data-id="${c.id}" ${c.selected ? 'checked' : ''} onclick="event.stopPropagation(); updateSelectAllStatus();"><div class="flex-1" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" onclick="selectCase('${c.id}')"><span class="method-badge">${c.method}</span> ${c.name}</div><div id="status-icon-${c.id}" style="font-size: 0.8rem;">${statusEmoji}</div>`;
         list.appendChild(div);
     });
     updateSelectAllStatus();
 }
 
 function addCase() {
-    saveCurrentCase(); const group = getActiveGroup();
+    saveCurrentInputs();
     const newCase = {
-        id: 'c_' + Date.now(), name: `新测试场景 ${group.cases.length + 1}`, uri: '/api/test', method: 'POST',
-        headers: '{\n    "Content-Type": "application/json"\n}', payload: '{\n    \n}',
-        isDiffPayload: false, payloadNew: '{\n    \n}', isCaseIgnore: false, caseIgnorePaths: '', lastStatus: null, selected: true
+        id: 'c_' + Date.now(), name: `新交易接口`, uri: '/api/v1/new', method: 'POST',
+        headers: '{\n    "Content-Type": "application/json"\n}', isCaseIgnore: false, caseIgnorePaths: '', selected: true,
+        scenarios: [{ id: 's_' + Date.now(), name: '正常流转场景', payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, selected: true }]
     };
-    group.cases.push(newCase); selectCase(newCase.id); renderCaseList();
+    appState.currentGroupData.cases.push(newCase);
+    selectCase(newCase.id); renderCaseList(); document.getElementById('caseName').focus();
 }
 
 function selectCase(id) {
-    saveCurrentCase(); appState.activeCaseId = id; const group = getActiveGroup(); const currentCase = group.cases.find(c => c.id === id); if (!currentCase) return;
+    saveCurrentInputs();
+    appState.activeCaseId = id;
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === id); if (!currentCase) return;
     document.getElementById('emptyState').style.display = 'none'; document.getElementById('caseEditor').style.display = 'flex';
-    document.getElementById('caseName').value = currentCase.name; document.getElementById('uri').value = currentCase.uri; document.getElementById('method').value = currentCase.method; document.getElementById('headers').value = currentCase.headers; document.getElementById('payload').value = currentCase.payload;
-    document.getElementById('isDiffPayload').checked = currentCase.isDiffPayload || false; document.getElementById('payloadNew').value = currentCase.payloadNew || currentCase.payload; toggleDiffPayload();
+    document.getElementById('caseName').value = currentCase.name; document.getElementById('uri').value = currentCase.uri; document.getElementById('method').value = currentCase.method; document.getElementById('headers').value = currentCase.headers;
     document.getElementById('isCaseIgnore').checked = currentCase.isCaseIgnore || false; document.getElementById('caseIgnorePaths').value = currentCase.caseIgnorePaths || ''; toggleCaseIgnore();
-    resetResultUI(); renderCaseList();
+
+    if (currentCase.scenarios.length > 0) { selectScenario(currentCase.scenarios[0].id); }
+    renderCaseList();
 }
 
-function saveCurrentCase() {
-    if (!appState.activeCaseId) return; const group = getActiveGroup(); const c = group.cases.find(c => c.id === appState.activeCaseId);
+// --- 🌟 工作台：渲染 Tab ---
+function renderScenarioTabs() {
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+    const tabsContainer = document.getElementById('scenarioTabs');
+    tabsContainer.innerHTML = '';
+    currentCase.scenarios.forEach(s => {
+        const tab = document.createElement('div');
+        tab.className = `scenario-tab ${s.id === appState.activeScenarioId ? 'active' : ''}`;
+        let emoji = s.lastStatus === 'success' ? '✅' : (s.lastStatus === 'error' ? '❌' : '⏺️');
+        tab.innerHTML = `<input type="checkbox" title="参与跑批" ${s.selected ? 'checked' : ''} onclick="event.stopPropagation(); toggleScenarioSelection('${s.id}', this.checked)"><span onclick="selectScenario('${s.id}')">${s.name} <span id="s-icon-${s.id}">${emoji}</span></span>`;
+        tabsContainer.appendChild(tab);
+    });
+}
+
+function toggleScenarioSelection(scenId, isChecked) {
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+    const scen = currentCase.scenarios.find(s => s.id === scenId);
+    if(scen) scen.selected = isChecked;
+}
+
+function addScenario() {
+    saveCurrentInputs();
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+    const newScen = { id: 's_' + Date.now(), name: `新场景 ${currentCase.scenarios.length + 1}`, payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, selected: true };
+    currentCase.scenarios.push(newScen);
+    selectScenario(newScen.id);
+}
+
+function selectScenario(scenId) {
+    saveCurrentInputs(); appState.activeScenarioId = scenId;
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+    const scen = currentCase.scenarios.find(s => s.id === scenId); if(!scen) return;
+
+    renderScenarioTabs();
+    document.getElementById('scenarioName').value = scen.name; document.getElementById('payload').value = scen.payload; document.getElementById('isDiffPayload').checked = scen.isDiffPayload; document.getElementById('payloadNew').value = scen.payloadNew;
+    toggleDiffPayload();
+
+    const cachedResult = appState.transientResults[scenId];
+    if (cachedResult) {
+        document.getElementById('diffResult').innerHTML = cachedResult.diffBoard; document.getElementById('unifiedGitDiff').innerHTML = cachedResult.gitView;
+        const badge = document.getElementById('statusBadge'); badge.className = cachedResult.badgeClass; badge.innerText = cachedResult.badgeText;
+    } else { resetResultUI(scen.lastStatus === null ? "等待执行..." : "请重新执行以查看明细"); }
+}
+
+function saveCurrentInputs() {
+    if (!appState.activeCaseId || !appState.currentGroupData) return;
+    const c = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
     if (c) {
-        c.name = document.getElementById('caseName').value; c.uri = document.getElementById('uri').value; c.method = document.getElementById('method').value; c.headers = document.getElementById('headers').value; c.payload = document.getElementById('payload').value;
-        c.isDiffPayload = document.getElementById('isDiffPayload').checked; c.payloadNew = document.getElementById('payloadNew').value;
+        c.name = document.getElementById('caseName').value; c.uri = document.getElementById('uri').value; c.method = document.getElementById('method').value; c.headers = document.getElementById('headers').value;
         c.isCaseIgnore = document.getElementById('isCaseIgnore').checked; c.caseIgnorePaths = document.getElementById('caseIgnorePaths').value;
+        if (appState.activeScenarioId) {
+            const scen = c.scenarios.find(s => s.id === appState.activeScenarioId);
+            if (scen) { scen.name = document.getElementById('scenarioName').value; scen.payload = document.getElementById('payload').value; scen.isDiffPayload = document.getElementById('isDiffPayload').checked; scen.payloadNew = document.getElementById('payloadNew').value; }
+        }
     }
 }
 
@@ -89,155 +181,151 @@ function toggleDiffPayload() {
 
 function toggleCaseIgnore() { const isIgnore = document.getElementById('isCaseIgnore').checked; document.getElementById('caseIgnorePaths').style.display = isIgnore ? 'block' : 'none'; }
 function formatAllPayloads() { formatInput('payload'); if (document.getElementById('isDiffPayload').checked) { formatInput('payloadNew'); } }
-function toggleSelectAll() { const isChecked = document.getElementById('selectAll').checked; const group = getActiveGroup(); group.cases.forEach(c => c.selected = isChecked); document.querySelectorAll('.case-select').forEach(cb => cb.checked = isChecked); }
-function updateSelectAllStatus() { const group = getActiveGroup(); document.querySelectorAll('.case-select').forEach(cb => { const id = cb.getAttribute('data-id'); const c = group.cases.find(x => x.id === id); if(c) c.selected = cb.checked; }); const allChecked = group.cases.length > 0 && group.cases.every(c => c.selected); document.getElementById('selectAll').checked = allChecked; }
-function openBatchModal() { updateSelectAllStatus(); const group = getActiveGroup(); const selectedCases = group.cases.filter(c => c.selected); if (selectedCases.length === 0) { alert("👈 请至少在左侧勾选一个测试案例！"); return; } document.getElementById('selectedCount').value = selectedCases.length + " 个用例"; document.getElementById('batchModal').style.display = 'flex'; }
+function toggleSelectAll() { const isChecked = document.getElementById('selectAll').checked; appState.currentGroupData.cases.forEach(c => c.selected = isChecked); document.querySelectorAll('.case-select').forEach(cb => cb.checked = isChecked); }
+function updateSelectAllStatus() { document.querySelectorAll('.case-select').forEach(cb => { const id = cb.getAttribute('data-id'); const c = appState.currentGroupData.cases.find(x => x.id === id); if(c) c.selected = cb.checked; }); const allChecked = appState.currentGroupData.cases.length > 0 && appState.currentGroupData.cases.every(c => c.selected); document.getElementById('selectAll').checked = allChecked; }
+
+// --- 🌟 统一的跑批入口引擎 ---
+function openBatchModal(scope) {
+    updateSelectAllStatus();
+    appState.batchScope = scope; // 'global' 或 'case'
+    let count = 0;
+
+    if (scope === 'global') {
+        appState.currentGroupData.cases.filter(c => c.selected).forEach(c => count += c.scenarios.filter(s => s.selected).length);
+        if (count === 0) { alert("👈 请在左侧勾选接口，并确保其内部场景已被勾选！"); return; }
+    } else if (scope === 'case') {
+        const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+        count = currentCase.scenarios.filter(s => s.selected).length;
+        if (count === 0) { alert("此接口下没有勾选任何测试场景！"); return; }
+    }
+
+    document.getElementById('selectedCount').value = count + " 个场景";
+    document.getElementById('batchModal').style.display = 'flex';
+}
 function closeBatchModal() { document.getElementById('batchModal').style.display = 'none'; }
 
-async function runCompare(caseObj) {
+async function sendCompareRequest(caseObj, scenarioObj) {
     const payload = {
         old_prefix: document.getElementById('oldPrefix').value, new_prefix: document.getElementById('newPrefix').value, uri: caseObj.uri, method: caseObj.method, headers: caseObj.headers,
-        payload: caseObj.payload, payload_new: caseObj.payloadNew || "", is_diff_payload: caseObj.isDiffPayload || false,
+        payload: scenarioObj.payload, payload_new: scenarioObj.payloadNew || "", is_diff_payload: scenarioObj.isDiffPayload || false,
         ignore_paths: document.getElementById('ignorePaths').value, case_ignore_paths: caseObj.isCaseIgnore ? caseObj.caseIgnorePaths : ""
     };
     try { const res = await fetch('/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return await res.json(); } catch (e) { return { status: 'error', message: e.message }; }
 }
 
-document.getElementById('runSingleBtn').addEventListener('click', async () => {
-    saveCurrentCase(); const group = getActiveGroup(); const c = group.cases.find(c => c.id === appState.activeCaseId); if(!c) return;
-    document.getElementById('runSingleBtn').innerHTML = "⏳ 执行中..."; resetResultUI("请求中...");
-    const result = await runCompare(c); renderResult(result);
-    c.lastStatus = (result.status === 'error' || typeof result.diff_result !== 'string') ? 'error' : 'success'; document.getElementById('runSingleBtn').innerHTML = "▶️ 执行当前案例"; renderCaseList();
-});
+// 执行单场景
+async function runActiveScenario() {
+    saveCurrentInputs();
+    const c = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); const scen = c.scenarios.find(s => s.id === appState.activeScenarioId); if(!scen) return;
+    document.getElementById('runSingleScenarioBtn').innerHTML = "⏳ 执行中..."; resetResultUI("请求中...");
 
-async function runBatch() {
-    saveCurrentCase(); const group = getActiveGroup(); const selectedCases = group.cases.filter(c => c.selected);
-    const delayMs = parseInt(document.getElementById('batchDelay').value) || 0; const stopOnError = document.getElementById('stopOnError').checked;
-    closeBatchModal(); const btn = document.querySelector('.batch-controls .btn-success'); btn.disabled = true;
-    for (let i = 0; i < selectedCases.length; i++) {
-        const c = selectedCases[i]; btn.innerHTML = `⏳ (${i+1}/${selectedCases.length}) 跑批中`; document.getElementById(`status-icon-${c.id}`).innerText = "⏳";
-        selectCase(c.id); const result = await runCompare(c); renderResult(result);
-        c.lastStatus = (result.status === 'error' || typeof result.diff_result !== 'string') ? 'error' : 'success'; document.getElementById(`status-icon-${c.id}`).innerText = c.lastStatus === 'success' ? '✅' : '❌';
-        if (stopOnError && c.lastStatus === 'error') { alert(`🚫 跑批已熔断！`); break; }
-        if (delayMs > 0 && i < selectedCases.length - 1) { document.getElementById('diffResult').innerHTML += `\n<div style="color:#94a3b8; padding:10px;">⏳ 睡眠 ${delayMs}ms...</div>`; await sleep(delayMs); }
-    }
-    btn.innerHTML = "⚙️ 批量执行"; btn.disabled = false;
+    const result = await sendCompareRequest(c, scen);
+    processAndRenderResult(scen.id, result);
+
+    document.getElementById('runSingleScenarioBtn').innerHTML = "▶️ 单独执行此场景"; renderScenarioTabs(); renderCaseList(); saveWorkspaceToServer(false);
 }
 
-function renderResult(data) {
-    const badge = document.getElementById('statusBadge');
-    if (data.status === "error") {
-        document.getElementById('diffResult').innerHTML = `<div style="color:#f87171; padding:10px;">❌ 请求异常: ${data.message}</div>`;
-        badge.className = "badge badge-error"; badge.innerText = "执行失败"; return;
+// 跑批执行器 (包含自动重试)
+async function runBatch() {
+    saveCurrentInputs();
+    let executionList = [];
+    if (appState.batchScope === 'global') {
+        appState.currentGroupData.cases.filter(c => c.selected).forEach(c => c.scenarios.filter(s => s.selected).forEach(s => executionList.push({c, s})));
+    } else {
+        const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
+        currentCase.scenarios.filter(s => s.selected).forEach(s => executionList.push({c: currentCase, s}));
     }
 
-    document.getElementById('diffResult').innerHTML = renderStructuredDiffBoard(data.diff_result);
+    const delayMs = parseInt(document.getElementById('batchDelay').value) || 0;
+    const maxRetries = parseInt(document.getElementById('batchRetries').value) || 0;
+    const stopOnError = document.getElementById('stopOnError').checked;
 
-    // 🌟 统一渲染合并后的 Git 视图
-    document.getElementById('unifiedGitDiff').innerHTML = renderUnifiedGitDiff(data.text_diff || []);
+    closeBatchModal();
+    // 禁用页面主要按钮
+    document.getElementById('runCaseBtn').disabled = true;
 
-    if (typeof data.diff_result === 'string') { badge.className = "badge badge-success"; badge.innerText = "完全一致"; }
-    else { badge.className = "badge badge-error"; badge.innerText = "存在差异"; }
+    for (let i = 0; i < executionList.length; i++) {
+        const target = executionList[i];
+
+        if (appState.activeCaseId !== target.c.id) selectCase(target.c.id);
+        else selectScenario(target.s.id);
+
+        let attempt = 0;
+        let result;
+        while (attempt <= maxRetries) {
+            document.getElementById(`s-icon-${target.s.id}`).innerText = "⏳";
+            result = await sendCompareRequest(target.c, target.s);
+            let isSuccess = result.status !== 'error' && typeof result.diff_result === 'string';
+
+            if (isSuccess) break;
+
+            attempt++;
+            if (attempt <= maxRetries) {
+                document.getElementById('diffResult').innerHTML = `<div style="color:#fbbf24; padding:10px;">⚠️ 失败，系统正在进行第 ${attempt}/${maxRetries} 次重试...</div>`;
+                await sleep(1500); // 重试前退避
+            }
+        }
+
+        processAndRenderResult(target.s.id, result);
+
+        if (stopOnError && target.s.lastStatus === 'error') { alert(`🚫 跑批熔断！接口[${target.c.name}] 场景[${target.s.name}] 失败。`); break; }
+        if (delayMs > 0 && i < executionList.length - 1) { document.getElementById('diffResult').innerHTML += `<div style="color:#94a3b8; padding:10px;">⏳ 准备下一个，睡眠 ${delayMs}ms...</div>`; await sleep(delayMs); }
+    }
+    document.getElementById('runCaseBtn').disabled = false;
+    renderCaseList(); saveWorkspaceToServer(false);
+}
+
+function processAndRenderResult(scenId, data) {
+    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); const scen = currentCase.scenarios.find(s => s.id === scenId);
+    let diffBoardHtml = ''; let gitViewHtml = ''; let badgeClass = ''; let badgeText = '';
+    if (data.status === "error") { diffBoardHtml = `<div style="color:#f87171; padding:10px;">❌ 请求异常: ${data.message}</div>`; badgeClass = "badge badge-error"; badgeText = "执行失败"; scen.lastStatus = 'error'; }
+    else {
+        diffBoardHtml = renderStructuredDiffBoard(data.diff_result); gitViewHtml = renderUnifiedGitDiff(data.text_diff || []);
+        if (typeof data.diff_result === 'string') { badgeClass = "badge badge-success"; badgeText = "完全一致"; scen.lastStatus = 'success'; }
+        else { badgeClass = "badge badge-error"; badgeText = "存在差异"; scen.lastStatus = 'error'; }
+    }
+    appState.transientResults[scenId] = { diffBoard: diffBoardHtml, gitView: gitViewHtml, badgeClass, badgeText };
+    if (appState.activeScenarioId === scenId) { document.getElementById('diffResult').innerHTML = diffBoardHtml; document.getElementById('unifiedGitDiff').innerHTML = gitViewHtml; document.getElementById('statusBadge').className = badgeClass; document.getElementById('statusBadge').innerText = badgeText; }
 }
 
 function resetResultUI(text = "等待执行...") { document.getElementById('diffResult').innerHTML = `<div style="padding:10px; color:#94a3b8;">${text}</div>`; document.getElementById('unifiedGitDiff').innerHTML = ""; document.getElementById('statusBadge').innerText = ""; document.getElementById('statusBadge').className = "badge"; }
 function enableTabIndent(elementId) { const el = document.getElementById(elementId); el.addEventListener('keydown', function(e) { if (e.key === 'Tab') { e.preventDefault(); const start = this.selectionStart, end = this.selectionEnd; this.value = this.value.substring(0, start) + "    " + this.value.substring(end); this.selectionStart = this.selectionEnd = start + 4; } }); }
-function formatInput(id) { try { const el = document.getElementById(id); const obj = JSON.parse(el.value); el.value = JSON.stringify(obj, null, 4); } catch (e) { alert("JSON 格式有误，请检查！"); } }
+function formatInput(id) { try { const el = document.getElementById(id); const obj = JSON.parse(el.value); el.value = JSON.stringify(obj, null, 4); } catch (e) { alert("JSON 格式有误！"); } }
 
-// 🌟 新增：全局方法，一键添加忽略并立刻重跑单测！
 window.quickIgnoreField = function(path) {
-    document.getElementById('isCaseIgnore').checked = true;
-    toggleCaseIgnore();
-
+    document.getElementById('isCaseIgnore').checked = true; toggleCaseIgnore();
     let input = document.getElementById('caseIgnorePaths');
     let current = input.value.split(',').map(s => s.trim()).filter(s => s);
-    if (!current.includes(path)) {
-        current.push(path);
-        input.value = current.join(', ');
-    }
-
-    saveCurrentCase();
-    document.getElementById('runSingleBtn').click(); // 自动触发重跑，体验拉满
+    if (!current.includes(path)) { current.push(path); input.value = current.join(', '); }
+    saveCurrentInputs(); runActiveScenario();
 };
 
 function renderStructuredDiffBoard(diffObj) {
     if (typeof diffObj === 'string') return `<div class="diff-success-box"><div>🎉</div><div>${diffObj}</div></div>`;
-    let html = '';
-    const fmt = val => { if (typeof val === 'object') return JSON.stringify(val); if (typeof val === 'string') return `"${val}"`; return String(val); };
-
-    // 生成带有一键忽略按钮的字段标题
+    let html = ''; const fmt = val => { if (typeof val === 'object') return JSON.stringify(val); if (typeof val === 'string') return `"${val}"`; return String(val); };
     const genTitle = path => `<div class="diff-field-name">📌 字段: ${path} <button class="btn-quick-ignore" onclick="quickIgnoreField('${path.replace(/'/g, "\\'")}')">🚫 忽略此字段</button></div>`;
 
-    if (diffObj.values_changed) {
-        html += `<div class="diff-section-title">✏️ 值不一致 (Values Mismatch)</div>`;
-        for (let path in diffObj.values_changed) {
-            let change = diffObj.values_changed[path];
-            html += `<div class="diff-detail-item">${genTitle(path)}
-                <div class="diff-compare-row"><span class="old-tag">老系统</span> <span class="val-text">${fmt(change.old_value)}</span></div>
-                <div class="diff-compare-row"><span class="new-tag">新系统</span> <span class="val-text">${fmt(change.new_value)}</span></div></div>`;
-        }
-    }
-
-    if (diffObj.type_changes) {
-        html += `<div class="diff-section-title">🔄 类型不一致 (Type Mismatch)</div>`;
-        for (let path in diffObj.type_changes) {
-            let change = diffObj.type_changes[path];
-            html += `<div class="diff-detail-item">${genTitle(path)}
-                <div class="diff-compare-row"><span class="old-tag">老系统</span> <span class="val-text">${fmt(change.old_value)} <span style="color:#64748b">(${change.old_type})</span></span></div>
-                <div class="diff-compare-row"><span class="new-tag">新系统</span> <span class="val-text">${fmt(change.new_value)} <span style="color:#64748b">(${change.new_type})</span></span></div></div>`;
-        }
-    }
-
-    if (diffObj.dictionary_item_added || diffObj.iterable_item_added) {
-        html += `<div class="diff-section-title">🟢 新系统多出字段 (Added in New)</div>`;
-        if(diffObj.dictionary_item_added) diffObj.dictionary_item_added.forEach(path => { html += `<div class="diff-detail-item">${genTitle(path)}</div>`; });
-        if(diffObj.iterable_item_added) { for (let path in diffObj.iterable_item_added) { html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="new-tag">多出内容</span> <span class="val-text">${fmt(diffObj.iterable_item_added[path])}</span></div></div>`; } }
-    }
-
-    if (diffObj.dictionary_item_removed || diffObj.iterable_item_removed) {
-        html += `<div class="diff-section-title">🔴 新系统缺失字段 (Missing in New)</div>`;
-        if(diffObj.dictionary_item_removed) diffObj.dictionary_item_removed.forEach(path => { html += `<div class="diff-detail-item">${genTitle(path)}</div>`; });
-        if(diffObj.iterable_item_removed) { for (let path in diffObj.iterable_item_removed) { html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="old-tag">缺失内容</span> <span class="val-text">${fmt(diffObj.iterable_item_removed[path])}</span></div></div>`; } }
-    }
+    if (diffObj.values_changed) { html += `<div class="diff-section-title">✏️ 值不一致 (Values Mismatch)</div>`; for (let path in diffObj.values_changed) { let change = diffObj.values_changed[path]; html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="old-tag">老系统</span> <span class="val-text">${fmt(change.old_value)}</span></div><div class="diff-compare-row"><span class="new-tag">新系统</span> <span class="val-text">${fmt(change.new_value)}</span></div></div>`; } }
+    if (diffObj.type_changes) { html += `<div class="diff-section-title">🔄 类型不一致 (Type Mismatch)</div>`; for (let path in diffObj.type_changes) { let change = diffObj.type_changes[path]; html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="old-tag">老系统</span> <span class="val-text">${fmt(change.old_value)} <span style="color:#64748b">(${change.old_type})</span></span></div><div class="diff-compare-row"><span class="new-tag">新系统</span> <span class="val-text">${fmt(change.new_value)} <span style="color:#64748b">(${change.new_type})</span></span></div></div>`; } }
+    if (diffObj.dictionary_item_added || diffObj.iterable_item_added) { html += `<div class="diff-section-title">🟢 新系统多出字段 (Added in New)</div>`; if(diffObj.dictionary_item_added) diffObj.dictionary_item_added.forEach(path => { html += `<div class="diff-detail-item">${genTitle(path)}</div>`; }); if(diffObj.iterable_item_added) { for (let path in diffObj.iterable_item_added) { html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="new-tag">多出内容</span> <span class="val-text">${fmt(diffObj.iterable_item_added[path])}</span></div></div>`; } } }
+    if (diffObj.dictionary_item_removed || diffObj.iterable_item_removed) { html += `<div class="diff-section-title">🔴 新系统缺失字段 (Missing in New)</div>`; if(diffObj.dictionary_item_removed) diffObj.dictionary_item_removed.forEach(path => { html += `<div class="diff-detail-item">${genTitle(path)}</div>`; }); if(diffObj.iterable_item_removed) { for (let path in diffObj.iterable_item_removed) { html += `<div class="diff-detail-item">${genTitle(path)}<div class="diff-compare-row"><span class="old-tag">缺失内容</span> <span class="val-text">${fmt(diffObj.iterable_item_removed[path])}</span></div></div>`; } } }
     return html;
 }
 
-// 🌟 全新的统一 Git 行渲染引擎 (绝对对齐)
 function renderUnifiedGitDiff(ndiffLines) {
     if (!ndiffLines || ndiffLines.length === 0) return '';
     let html = '';
-
     for (let i = 0; i < ndiffLines.length; i++) {
-        let line = ndiffLines[i];
-        if (line.startsWith('? ')) continue;
-
-        let type = line.charAt(0); // ' ', '-', '+'
-        let content = line.substring(2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || ' ';
-
-        if (type === ' ') {
-            html += `<div class="diff-table-row"><div class="diff-table-cell">${content}</div><div class="diff-table-cell">${content}</div></div>`;
-        } else if (type === '-') {
-            // 预测下一行是不是被修改的（+）
-            let hasPlus = false;
-            let plusContent = '';
-            let skipCount = 0;
+        let line = ndiffLines[i]; if (line.startsWith('? ')) continue;
+        let type = line.charAt(0); let content = line.substring(2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || ' ';
+        if (type === ' ') { html += `<div class="diff-table-row"><div class="diff-table-cell">${content}</div><div class="diff-table-cell">${content}</div></div>`; }
+        else if (type === '-') {
+            let hasPlus = false; let plusContent = ''; let skipCount = 0;
             if (i + 1 < ndiffLines.length && ndiffLines[i+1].startsWith('? ')) skipCount++;
-            if (i + 1 + skipCount < ndiffLines.length && ndiffLines[i+1+skipCount].startsWith('+ ')) {
-                hasPlus = true;
-                plusContent = ndiffLines[i+1+skipCount].substring(2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || ' ';
-                skipCount++;
-            }
-
-            if (hasPlus) {
-                // 如果是同一行的修改，放在同一个 Flex 容器的左右两边
-                html += `<div class="diff-table-row"><div class="diff-table-cell del">${content}</div><div class="diff-table-cell add">${plusContent}</div></div>`;
-                i += skipCount;
-            } else {
-                html += `<div class="diff-table-row"><div class="diff-table-cell del">${content}</div><div class="diff-table-cell empty"></div></div>`;
-            }
-        } else if (type === '+') {
-            html += `<div class="diff-table-row"><div class="diff-table-cell empty"></div><div class="diff-table-cell add">${content}</div></div>`;
-        }
+            if (i + 1 + skipCount < ndiffLines.length && ndiffLines[i+1+skipCount].startsWith('+ ')) { hasPlus = true; plusContent = ndiffLines[i+1+skipCount].substring(2).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') || ' '; skipCount++; }
+            if (hasPlus) { html += `<div class="diff-table-row"><div class="diff-table-cell del">${content}</div><div class="diff-table-cell add">${plusContent}</div></div>`; i += skipCount; }
+            else { html += `<div class="diff-table-row"><div class="diff-table-cell del">${content}</div><div class="diff-table-cell empty"></div></div>`; }
+        } else if (type === '+') { html += `<div class="diff-table-row"><div class="diff-table-cell empty"></div><div class="diff-table-cell add">${content}</div></div>`; }
     }
     return html;
 }

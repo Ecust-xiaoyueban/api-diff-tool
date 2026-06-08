@@ -1,0 +1,74 @@
+{
+  "id": "g_1780946688894",
+  "name": "烦烦烦",
+  "config": {
+    "oldPrefix": "",
+    "newPrefix": "",
+    "ignorePaths": ""
+  },
+  "cases": [
+    {
+      "id": "c_1780946691753",
+      "name": "新交易接口",
+      "uri": "/api/v1/new",
+      "method": "POST",
+      "headers": "{\n    \"Content-Type\": \"application/json\"\n}",
+      "isCaseIgnore": false,
+      "caseIgnorePaths": "",
+      "selected": true,
+      "scenarios": [
+        {
+          "id": "s_1780946691753",
+          "name": "正常流转场景",
+          "payload": "{\n    \n}",
+          "isDiffPayload": false,
+          "payloadNew": "{\n    \n}",
+          "lastStatus": null,
+          "selected": true
+        }
+      ]
+    },
+    {
+      "id": "c_1780946738345",
+      "name": "新交易接口222",
+      "uri": "/api/v1/new",
+      "method": "POST",
+      "headers": "{\n    \"Content-Type\": \"application/json\"\n}",
+      "isCaseIgnore": false,
+      "caseIgnorePaths": "",
+      "selected": true,
+      "scenarios": [
+        {
+          "id": "s_1780946738345",
+          "name": "正常流转场景",
+          "payload": "{\n    \n}",
+          "isDiffPayload": false,
+          "payloadNew": "{\n    \n}",
+          "lastStatus": null,
+          "selected": true
+        }
+      ]
+    },
+    {
+      "id": "c_1780946827930",
+      "name": "新交易接口",
+      "uri": "/api/v1/new",
+      "method": "POST",
+      "headers": "{\n    \"Content-Type\": \"application/json\"\n}",
+      "isCaseIgnore": false,
+      "caseIgnorePaths": "",
+      "selected": true,
+      "scenarios": [
+        {
+          "id": "s_1780946827930",
+          "name": "正常流转场景",
+          "payload": "{\n    \n}",
+          "isDiffPayload": false,
+          "payloadNew": "{\n    \n}",
+          "lastStatus": null,
+          "selected": true
+        }
+      ]
+    }
+  ]
+}
