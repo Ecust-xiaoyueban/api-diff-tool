@@ -4,8 +4,7 @@ let appState = {
     currentGroupData: null,
     activeCaseId: null,
     activeScenarioId: null,
-    batchScope: 'global', // 记录跑批范围: 'global' 或 'case'
-    transientResults: {}
+    batchScope: 'global'
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -16,10 +15,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadInitialData();
 });
 
-function initSyncScroll() {
-    const unifiedGitDiff = document.getElementById('unifiedGitDiff');
-    // 对于统一表格结构的 Git View，内部自带对齐，仅保留此处占位
-}
+function initSyncScroll() {}
 
 async function loadInitialData() {
     try {
@@ -40,11 +36,11 @@ async function loadGroupData(groupId) {
 
         data.cases.forEach(c => {
             if (!c.scenarios) {
-                c.scenarios = [{
-                    id: 's_' + Date.now() + Math.floor(Math.random()*1000),
-                    name: '默认场景 1', payload: c.payload || '{\n    \n}', isDiffPayload: c.isDiffPayload || false, payloadNew: c.payloadNew || '{\n    \n}', lastStatus: c.lastStatus || null, selected: true
-                }];
+                c.scenarios = [{ id: 's_' + Date.now() + Math.floor(Math.random()*1000), name: '默认场景 1', payload: c.payload || '{\n    \n}', isDiffPayload: c.isDiffPayload || false, payloadNew: c.payloadNew || '{\n    \n}', lastStatus: c.lastStatus || null, lastResult: null, selected: true }];
                 delete c.payload; delete c.isDiffPayload; delete c.payloadNew; delete c.lastStatus;
+            } else {
+                // 兼容已有场景数据，增加 lastResult 字段
+                c.scenarios.forEach(s => { if(s.lastResult === undefined) s.lastResult = null; });
             }
         });
 
@@ -99,7 +95,7 @@ function addCase() {
     const newCase = {
         id: 'c_' + Date.now(), name: `新交易接口`, uri: '/api/v1/new', method: 'POST',
         headers: '{\n    "Content-Type": "application/json"\n}', isCaseIgnore: false, caseIgnorePaths: '', selected: true,
-        scenarios: [{ id: 's_' + Date.now(), name: '正常流转场景', payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, selected: true }]
+        scenarios: [{ id: 's_' + Date.now(), name: '正常流转场景', payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, lastResult: null, selected: true }]
     };
     appState.currentGroupData.cases.push(newCase);
     selectCase(newCase.id); renderCaseList(); document.getElementById('caseName').focus();
@@ -117,7 +113,6 @@ function selectCase(id) {
     renderCaseList();
 }
 
-// --- 🌟 工作台：渲染 Tab ---
 function renderScenarioTabs() {
     const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
     const tabsContainer = document.getElementById('scenarioTabs');
@@ -131,16 +126,12 @@ function renderScenarioTabs() {
     });
 }
 
-function toggleScenarioSelection(scenId, isChecked) {
-    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
-    const scen = currentCase.scenarios.find(s => s.id === scenId);
-    if(scen) scen.selected = isChecked;
-}
+function toggleScenarioSelection(scenId, isChecked) { const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); const scen = currentCase.scenarios.find(s => s.id === scenId); if(scen) scen.selected = isChecked; }
 
 function addScenario() {
     saveCurrentInputs();
     const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
-    const newScen = { id: 's_' + Date.now(), name: `新场景 ${currentCase.scenarios.length + 1}`, payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, selected: true };
+    const newScen = { id: 's_' + Date.now(), name: `新场景 ${currentCase.scenarios.length + 1}`, payload: '{\n    \n}', isDiffPayload: false, payloadNew: '{\n    \n}', lastStatus: null, lastResult: null, selected: true };
     currentCase.scenarios.push(newScen);
     selectScenario(newScen.id);
 }
@@ -154,11 +145,12 @@ function selectScenario(scenId) {
     document.getElementById('scenarioName').value = scen.name; document.getElementById('payload').value = scen.payload; document.getElementById('isDiffPayload').checked = scen.isDiffPayload; document.getElementById('payloadNew').value = scen.payloadNew;
     toggleDiffPayload();
 
-    const cachedResult = appState.transientResults[scenId];
-    if (cachedResult) {
-        document.getElementById('diffResult').innerHTML = cachedResult.diffBoard; document.getElementById('unifiedGitDiff').innerHTML = cachedResult.gitView;
-        const badge = document.getElementById('statusBadge'); badge.className = cachedResult.badgeClass; badge.innerText = cachedResult.badgeText;
-    } else { resetResultUI(scen.lastStatus === null ? "等待执行..." : "请重新执行以查看明细"); }
+    // 🌟 直接从场景持久化数据中提取原始响应，实时重绘 HTML
+    if (scen.lastResult) {
+        renderResult(scen.lastResult);
+    } else {
+        resetResultUI(scen.lastStatus === null ? "等待执行..." : "请重新执行以查看明细");
+    }
 }
 
 function saveCurrentInputs() {
@@ -184,25 +176,27 @@ function formatAllPayloads() { formatInput('payload'); if (document.getElementBy
 function toggleSelectAll() { const isChecked = document.getElementById('selectAll').checked; appState.currentGroupData.cases.forEach(c => c.selected = isChecked); document.querySelectorAll('.case-select').forEach(cb => cb.checked = isChecked); }
 function updateSelectAllStatus() { document.querySelectorAll('.case-select').forEach(cb => { const id = cb.getAttribute('data-id'); const c = appState.currentGroupData.cases.find(x => x.id === id); if(c) c.selected = cb.checked; }); const allChecked = appState.currentGroupData.cases.length > 0 && appState.currentGroupData.cases.every(c => c.selected); document.getElementById('selectAll').checked = allChecked; }
 
-// --- 🌟 统一的跑批入口引擎 ---
 function openBatchModal(scope) {
-    updateSelectAllStatus();
-    appState.batchScope = scope; // 'global' 或 'case'
-    let count = 0;
-
-    if (scope === 'global') {
-        appState.currentGroupData.cases.filter(c => c.selected).forEach(c => count += c.scenarios.filter(s => s.selected).length);
-        if (count === 0) { alert("👈 请在左侧勾选接口，并确保其内部场景已被勾选！"); return; }
-    } else if (scope === 'case') {
-        const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
-        count = currentCase.scenarios.filter(s => s.selected).length;
-        if (count === 0) { alert("此接口下没有勾选任何测试场景！"); return; }
-    }
-
-    document.getElementById('selectedCount').value = count + " 个场景";
-    document.getElementById('batchModal').style.display = 'flex';
+    updateSelectAllStatus(); appState.batchScope = scope; let count = 0;
+    if (scope === 'global') { appState.currentGroupData.cases.filter(c => c.selected).forEach(c => count += c.scenarios.filter(s => s.selected).length); if (count === 0) { alert("👈 请在左侧勾选接口，并确保其内部场景已被勾选！"); return; } }
+    else if (scope === 'case') { const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); count = currentCase.scenarios.filter(s => s.selected).length; if (count === 0) { alert("此接口下没有勾选任何测试场景！"); return; } }
+    document.getElementById('selectedCount').value = count + " 个场景"; document.getElementById('batchModal').style.display = 'flex';
 }
 function closeBatchModal() { document.getElementById('batchModal').style.display = 'none'; }
+
+// 🌟 一键清理结果缓存
+window.clearResultsCache = function() {
+    if(!confirm("确定要清除当前组所有场景的响应报文缓存吗？\n(这可以有效减小本地配置文件体积，但之前执行的详细结果将被清空)")) return;
+    appState.currentGroupData.cases.forEach(c => {
+        c.scenarios.forEach(s => {
+            s.lastResult = null;
+            s.lastStatus = null;
+        });
+    });
+    saveWorkspaceToServer(false);
+    renderCaseList();
+    if(appState.activeScenarioId) selectScenario(appState.activeScenarioId);
+};
 
 async function sendCompareRequest(caseObj, scenarioObj) {
     const payload = {
@@ -213,79 +207,74 @@ async function sendCompareRequest(caseObj, scenarioObj) {
     try { const res = await fetch('/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return await res.json(); } catch (e) { return { status: 'error', message: e.message }; }
 }
 
-// 执行单场景
 async function runActiveScenario() {
     saveCurrentInputs();
     const c = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); const scen = c.scenarios.find(s => s.id === appState.activeScenarioId); if(!scen) return;
     document.getElementById('runSingleScenarioBtn').innerHTML = "⏳ 执行中..."; resetResultUI("请求中...");
 
     const result = await sendCompareRequest(c, scen);
-    processAndRenderResult(scen.id, result);
+    processAndSaveResult(scen, result);
 
     document.getElementById('runSingleScenarioBtn').innerHTML = "▶️ 单独执行此场景"; renderScenarioTabs(); renderCaseList(); saveWorkspaceToServer(false);
 }
 
-// 跑批执行器 (包含自动重试)
 async function runBatch() {
     saveCurrentInputs();
     let executionList = [];
-    if (appState.batchScope === 'global') {
-        appState.currentGroupData.cases.filter(c => c.selected).forEach(c => c.scenarios.filter(s => s.selected).forEach(s => executionList.push({c, s})));
-    } else {
-        const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId);
-        currentCase.scenarios.filter(s => s.selected).forEach(s => executionList.push({c: currentCase, s}));
-    }
+    if (appState.batchScope === 'global') { appState.currentGroupData.cases.filter(c => c.selected).forEach(c => c.scenarios.filter(s => s.selected).forEach(s => executionList.push({c, s}))); }
+    else { const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); currentCase.scenarios.filter(s => s.selected).forEach(s => executionList.push({c: currentCase, s})); }
 
-    const delayMs = parseInt(document.getElementById('batchDelay').value) || 0;
-    const maxRetries = parseInt(document.getElementById('batchRetries').value) || 0;
-    const stopOnError = document.getElementById('stopOnError').checked;
-
-    closeBatchModal();
-    // 禁用页面主要按钮
-    document.getElementById('runCaseBtn').disabled = true;
+    const delayMs = parseInt(document.getElementById('batchDelay').value) || 0; const maxRetries = parseInt(document.getElementById('batchRetries').value) || 0; const stopOnError = document.getElementById('stopOnError').checked;
+    closeBatchModal(); document.getElementById('runCaseBtn').disabled = true;
 
     for (let i = 0; i < executionList.length; i++) {
         const target = executionList[i];
+        if (appState.activeCaseId !== target.c.id) selectCase(target.c.id); else selectScenario(target.s.id);
 
-        if (appState.activeCaseId !== target.c.id) selectCase(target.c.id);
-        else selectScenario(target.s.id);
-
-        let attempt = 0;
-        let result;
+        let attempt = 0; let result;
         while (attempt <= maxRetries) {
             document.getElementById(`s-icon-${target.s.id}`).innerText = "⏳";
             result = await sendCompareRequest(target.c, target.s);
             let isSuccess = result.status !== 'error' && typeof result.diff_result === 'string';
-
             if (isSuccess) break;
-
             attempt++;
-            if (attempt <= maxRetries) {
-                document.getElementById('diffResult').innerHTML = `<div style="color:#fbbf24; padding:10px;">⚠️ 失败，系统正在进行第 ${attempt}/${maxRetries} 次重试...</div>`;
-                await sleep(1500); // 重试前退避
-            }
+            if (attempt <= maxRetries) { document.getElementById('diffResult').innerHTML = `<div style="color:#fbbf24; padding:10px;">⚠️ 失败，系统正在进行第 ${attempt}/${maxRetries} 次重试...</div>`; await sleep(1500); }
         }
 
-        processAndRenderResult(target.s.id, result);
+        processAndSaveResult(target.s, result);
 
         if (stopOnError && target.s.lastStatus === 'error') { alert(`🚫 跑批熔断！接口[${target.c.name}] 场景[${target.s.name}] 失败。`); break; }
         if (delayMs > 0 && i < executionList.length - 1) { document.getElementById('diffResult').innerHTML += `<div style="color:#94a3b8; padding:10px;">⏳ 准备下一个，睡眠 ${delayMs}ms...</div>`; await sleep(delayMs); }
     }
-    document.getElementById('runCaseBtn').disabled = false;
-    renderCaseList(); saveWorkspaceToServer(false);
+    document.getElementById('runCaseBtn').disabled = false; renderCaseList(); saveWorkspaceToServer(false);
 }
 
-function processAndRenderResult(scenId, data) {
-    const currentCase = appState.currentGroupData.cases.find(c => c.id === appState.activeCaseId); const scen = currentCase.scenarios.find(s => s.id === scenId);
-    let diffBoardHtml = ''; let gitViewHtml = ''; let badgeClass = ''; let badgeText = '';
-    if (data.status === "error") { diffBoardHtml = `<div style="color:#f87171; padding:10px;">❌ 请求异常: ${data.message}</div>`; badgeClass = "badge badge-error"; badgeText = "执行失败"; scen.lastStatus = 'error'; }
-    else {
-        diffBoardHtml = renderStructuredDiffBoard(data.diff_result); gitViewHtml = renderUnifiedGitDiff(data.text_diff || []);
-        if (typeof data.diff_result === 'string') { badgeClass = "badge badge-success"; badgeText = "完全一致"; scen.lastStatus = 'success'; }
-        else { badgeClass = "badge badge-error"; badgeText = "存在差异"; scen.lastStatus = 'error'; }
+// 🌟 解析、保存持久化原始数据，并按需渲染
+function processAndSaveResult(scen, resultData) {
+    // 写入持久化模型
+    scen.lastResult = resultData;
+
+    if (resultData.status === "error") { scen.lastStatus = 'error'; }
+    else { scen.lastStatus = (typeof resultData.diff_result === 'string') ? 'success' : 'error'; }
+
+    // 如果当前活动的正好是这个场景，立刻渲染视图
+    if (appState.activeScenarioId === scen.id) {
+        renderResult(resultData);
     }
-    appState.transientResults[scenId] = { diffBoard: diffBoardHtml, gitView: gitViewHtml, badgeClass, badgeText };
-    if (appState.activeScenarioId === scenId) { document.getElementById('diffResult').innerHTML = diffBoardHtml; document.getElementById('unifiedGitDiff').innerHTML = gitViewHtml; document.getElementById('statusBadge').className = badgeClass; document.getElementById('statusBadge').innerText = badgeText; }
+}
+
+// 纯渲染函数 (负责根据原始 JSON 吐出 HTML)
+function renderResult(data) {
+    const badge = document.getElementById('statusBadge');
+    if (data.status === "error") {
+        document.getElementById('diffResult').innerHTML = `<div style="color:#f87171; padding:10px;">❌ 请求异常: ${data.message}</div>`;
+        document.getElementById('unifiedGitDiff').innerHTML = '';
+        badge.className = "badge badge-error"; badge.innerText = "执行失败"; return;
+    }
+    document.getElementById('diffResult').innerHTML = renderStructuredDiffBoard(data.diff_result);
+    document.getElementById('unifiedGitDiff').innerHTML = renderUnifiedGitDiff(data.text_diff || []);
+    if (typeof data.diff_result === 'string') { badge.className = "badge badge-success"; badge.innerText = "完全一致"; }
+    else { badge.className = "badge badge-error"; badge.innerText = "存在差异"; }
 }
 
 function resetResultUI(text = "等待执行...") { document.getElementById('diffResult').innerHTML = `<div style="padding:10px; color:#94a3b8;">${text}</div>`; document.getElementById('unifiedGitDiff').innerHTML = ""; document.getElementById('statusBadge').innerText = ""; document.getElementById('statusBadge').className = "badge"; }

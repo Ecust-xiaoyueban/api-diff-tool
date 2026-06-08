@@ -107,3 +107,6 @@ button { border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: 
 .scenario-tab.active { background: #ffffff; color: var(--primary); border-color: #cbd5e1; margin-bottom: -1px; padding-bottom: 9px; border-top: 3px solid var(--primary); }
 .scenario-tab input[type="checkbox"] { margin: 0; cursor: pointer; }
 .btn-add-scenario { background: transparent; border: none; color: #94a3b8; font-size: 1.2rem; cursor: pointer; padding: 4px 8px; margin-bottom: 2px; } .btn-add-scenario:hover { color: var(--primary); }
+                                                                                                                                                       .btn-outline-danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+.btn-outline-danger:hover { background: #fef2f2; }
+.mr-1 { margin-right: 0.5rem; }

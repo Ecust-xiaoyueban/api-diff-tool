@@ -77,7 +77,10 @@
                 <div class="scenario-workbench d-flex flex-column flex-1 overflow-hidden">
                     <div class="workbench-header d-flex justify-between align-items-center">
                         <span class="font-bold text-primary">📦 报文测试场景集合 (Scenarios)</span>
-                        <button class="btn-sm btn-outline-primary" onclick="addScenario()">➕ 新增场景</button>
+                        <div>
+                            <button class="btn-sm btn-outline-danger mr-1" onclick="clearResultsCache()" title="清理响应报文缓存，大幅减小配置文件体积">🧹 清理结果缓存</button>
+                            <button class="btn-sm btn-outline-primary" onclick="addScenario()">➕ 新增场景</button>
+                        </div>
                     </div>
 
                     <div class="scenario-tabs-container" id="scenarioTabs"></div>
