@@ -10,12 +10,11 @@ import httpx
 from deepdiff import DeepDiff
 import uvicorn
 
-app = FastAPI(title="API Diff Tool (Team Edition)")
+app = FastAPI(title="API Diff Tool (Pro Edition)")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# 🌟 新增：工作区隔离存储目录
 WORKSPACE_DIR = "workspaces"
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
@@ -25,7 +24,9 @@ class CompareRequest(BaseModel):
     new_prefix: str
     uri: str
     method: str = "POST"
-    headers: str
+    # 🌟 变更为独立的 Header 以支持差异化鉴权
+    old_headers: str = "{}"
+    new_headers: str = "{}"
     payload: str
     payload_new: str = ""
     is_diff_payload: bool = False
@@ -38,7 +39,6 @@ async def serve_ui(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-# 🌟 接口1：获取所有可用的组列表（不含具体报文，只做导航）
 @app.get("/api/groups")
 async def get_groups():
     groups = []
@@ -51,11 +51,9 @@ async def get_groups():
                     groups.append({"id": data.get("id"), "name": data.get("name")})
             except Exception:
                 continue
-    # 按创建时间/ID排序
     return sorted(groups, key=lambda x: x["id"])
 
 
-# 🌟 接口2：获取特定组的完整数据
 @app.get("/api/workspace/{group_id}")
 async def get_workspace(group_id: str):
     filepath = os.path.join(WORKSPACE_DIR, f"{group_id}.json")
@@ -65,7 +63,6 @@ async def get_workspace(group_id: str):
     return {}
 
 
-# 🌟 接口3：保存特定组的数据（实现文件级隔离）
 @app.post("/api/workspace/{group_id}")
 async def save_workspace(group_id: str, data: dict):
     filepath = os.path.join(WORKSPACE_DIR, f"{group_id}.json")
@@ -77,7 +74,10 @@ async def save_workspace(group_id: str, data: dict):
 @app.post("/api/compare")
 async def compare_api(req: CompareRequest):
     try:
-        headers_dict = json.loads(req.headers) if req.headers.strip() else {}
+        # 🌟 分别解析老系统和新系统的 Headers
+        headers_old_dict = json.loads(req.old_headers) if req.old_headers.strip() else {}
+        headers_new_dict = json.loads(req.new_headers) if req.new_headers.strip() else {}
+
         payload_old_dict = json.loads(req.payload) if req.payload.strip() else {}
         if req.is_diff_payload:
             payload_new_dict = json.loads(req.payload_new) if req.payload_new.strip() else {}
@@ -94,8 +94,9 @@ async def compare_api(req: CompareRequest):
         new_url = req.new_prefix.rstrip("/") + "/" + req.uri.lstrip("/")
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            old_task = client.request(req.method, old_url, headers=headers_dict, json=payload_old_dict)
-            new_task = client.request(req.method, new_url, headers=headers_dict, json=payload_new_dict)
+            # 🌟 携带各自的鉴权 Headers 发起并发请求
+            old_task = client.request(req.method, old_url, headers=headers_old_dict, json=payload_old_dict)
+            new_task = client.request(req.method, new_url, headers=headers_new_dict, json=payload_new_dict)
 
             results = await asyncio.gather(old_task, new_task, return_exceptions=True)
             old_res, new_res = results[0], results[1]

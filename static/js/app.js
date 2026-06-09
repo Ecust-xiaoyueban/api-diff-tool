@@ -10,7 +10,9 @@ let appState = {
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // 🌟 初始化更多的输入框
     enableTabIndent('headers'); enableTabIndent('payload'); enableTabIndent('payloadNew');
+    enableTabIndent('oldAuth'); enableTabIndent('newAuth');
     initSyncScroll();
     await loadInitialData();
 });
@@ -34,12 +36,15 @@ async function loadGroupData(groupId) {
         const res = await fetch(`/api/workspace/${groupId}`);
         let data = await res.json();
 
+        // 🌟 兼容老数据，增加 auth 字段
+        if (!data.config.oldAuth) data.config.oldAuth = "{\n\n}";
+        if (!data.config.newAuth) data.config.newAuth = "{\n\n}";
+
         data.cases.forEach(c => {
             if (!c.scenarios) {
                 c.scenarios = [{ id: 's_' + Date.now() + Math.floor(Math.random()*1000), name: '默认场景 1', payload: c.payload || '{\n    \n}', isDiffPayload: c.isDiffPayload || false, payloadNew: c.payloadNew || '{\n    \n}', lastStatus: c.lastStatus || null, lastResult: null, selected: true }];
                 delete c.payload; delete c.isDiffPayload; delete c.payloadNew; delete c.lastStatus;
             } else {
-                // 兼容已有场景数据，增加 lastResult 字段
                 c.scenarios.forEach(s => { if(s.lastResult === undefined) s.lastResult = null; });
             }
         });
@@ -57,16 +62,31 @@ function renderGroupSelect() { const sel = document.getElementById('groupSelect'
 function openGroupModal() { document.getElementById('newGroupName').value = ''; document.getElementById('groupModal').style.display = 'flex'; document.getElementById('newGroupName').focus(); }
 function closeGroupModal() { document.getElementById('groupModal').style.display = 'none'; }
 async function confirmCreateGroup() { const name = document.getElementById('newGroupName').value.trim(); if (!name) return; if (appState.currentGroupData) { await saveWorkspaceToServer(false); } const newId = 'g_' + Date.now(); await createGroupOnServer(name, newId); closeGroupModal(); }
-async function createGroupOnServer(name, id) { const newGroupData = { id: id, name: name, config: { oldPrefix: "", newPrefix: "", ignorePaths: "" }, cases: [] }; await fetch(`/api/workspace/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newGroupData) }); appState.groupsList.push({id: id, name: name}); await loadGroupData(id); }
+async function createGroupOnServer(name, id) { const newGroupData = { id: id, name: name, config: { oldPrefix: "", newPrefix: "", ignorePaths: "", oldAuth: "{}", newAuth: "{}" }, cases: [] }; await fetch(`/api/workspace/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newGroupData) }); appState.groupsList.push({id: id, name: name}); await loadGroupData(id); }
 async function switchGroup() { await saveWorkspaceToServer(false); const newId = document.getElementById('groupSelect').value; document.getElementById('caseList').innerHTML = '<div style="padding:10px;text-align:center;color:#94a3b8;">加载中...</div>'; await loadGroupData(newId); }
 
 function applyActiveGroup() {
     const group = appState.currentGroupData;
-    document.getElementById('oldPrefix').value = group.config.oldPrefix || ''; document.getElementById('newPrefix').value = group.config.newPrefix || ''; document.getElementById('ignorePaths').value = group.config.ignorePaths || '';
+    document.getElementById('oldPrefix').value = group.config.oldPrefix || '';
+    document.getElementById('newPrefix').value = group.config.newPrefix || '';
+    document.getElementById('ignorePaths').value = group.config.ignorePaths || '';
+    // 🌟 绑定鉴权配置
+    document.getElementById('oldAuth').value = group.config.oldAuth || '';
+    document.getElementById('newAuth').value = group.config.newAuth || '';
+
     document.getElementById('emptyState').style.display = 'flex'; document.getElementById('caseEditor').style.display = 'none'; document.getElementById('selectAll').checked = false; renderCaseList();
 }
 
-function saveCurrentGroupConfig() { if (appState.currentGroupData) { appState.currentGroupData.config.oldPrefix = document.getElementById('oldPrefix').value; appState.currentGroupData.config.newPrefix = document.getElementById('newPrefix').value; appState.currentGroupData.config.ignorePaths = document.getElementById('ignorePaths').value; } }
+function saveCurrentGroupConfig() {
+    if (appState.currentGroupData) {
+        appState.currentGroupData.config.oldPrefix = document.getElementById('oldPrefix').value;
+        appState.currentGroupData.config.newPrefix = document.getElementById('newPrefix').value;
+        appState.currentGroupData.config.ignorePaths = document.getElementById('ignorePaths').value;
+        // 🌟 保存鉴权配置
+        appState.currentGroupData.config.oldAuth = document.getElementById('oldAuth').value;
+        appState.currentGroupData.config.newAuth = document.getElementById('newAuth').value;
+    }
+}
 
 async function saveWorkspaceToServer(showAlert = true) {
     if (!appState.currentGroupData) return;
@@ -145,12 +165,8 @@ function selectScenario(scenId) {
     document.getElementById('scenarioName').value = scen.name; document.getElementById('payload').value = scen.payload; document.getElementById('isDiffPayload').checked = scen.isDiffPayload; document.getElementById('payloadNew').value = scen.payloadNew;
     toggleDiffPayload();
 
-    // 🌟 直接从场景持久化数据中提取原始响应，实时重绘 HTML
-    if (scen.lastResult) {
-        renderResult(scen.lastResult);
-    } else {
-        resetResultUI(scen.lastStatus === null ? "等待执行..." : "请重新执行以查看明细");
-    }
+    if (scen.lastResult) { renderResult(scen.lastResult); }
+    else { resetResultUI(scen.lastStatus === null ? "等待执行..." : "请重新执行以查看明细"); }
 }
 
 function saveCurrentInputs() {
@@ -184,25 +200,40 @@ function openBatchModal(scope) {
 }
 function closeBatchModal() { document.getElementById('batchModal').style.display = 'none'; }
 
-// 🌟 一键清理结果缓存
 window.clearResultsCache = function() {
     if(!confirm("确定要清除当前组所有场景的响应报文缓存吗？\n(这可以有效减小本地配置文件体积，但之前执行的详细结果将被清空)")) return;
-    appState.currentGroupData.cases.forEach(c => {
-        c.scenarios.forEach(s => {
-            s.lastResult = null;
-            s.lastStatus = null;
-        });
-    });
-    saveWorkspaceToServer(false);
-    renderCaseList();
-    if(appState.activeScenarioId) selectScenario(appState.activeScenarioId);
+    appState.currentGroupData.cases.forEach(c => { c.scenarios.forEach(s => { s.lastResult = null; s.lastStatus = null; }); });
+    saveWorkspaceToServer(false); renderCaseList(); if(appState.activeScenarioId) selectScenario(appState.activeScenarioId);
 };
 
+// 🌟 核心升级：合并全局鉴权与接口 Headers
 async function sendCompareRequest(caseObj, scenarioObj) {
+    // 解析基础业务 Headers
+    let caseHeaders = {};
+    try { caseHeaders = JSON.parse(caseObj.headers || "{}"); } catch(e){}
+
+    // 解析新老系统的全局鉴权 Headers
+    let oldAuth = {}; let newAuth = {};
+    try { oldAuth = JSON.parse(document.getElementById('oldAuth').value || "{}"); } catch(e){}
+    try { newAuth = JSON.parse(document.getElementById('newAuth').value || "{}"); } catch(e){}
+
+    // 动态合并 (鉴权信息优先级最高，如果同名会覆盖基础 Header)
+    const oldHeadersMerged = { ...caseHeaders, ...oldAuth };
+    const newHeadersMerged = { ...caseHeaders, ...newAuth };
+
     const payload = {
-        old_prefix: document.getElementById('oldPrefix').value, new_prefix: document.getElementById('newPrefix').value, uri: caseObj.uri, method: caseObj.method, headers: caseObj.headers,
-        payload: scenarioObj.payload, payload_new: scenarioObj.payloadNew || "", is_diff_payload: scenarioObj.isDiffPayload || false,
-        ignore_paths: document.getElementById('ignorePaths').value, case_ignore_paths: caseObj.isCaseIgnore ? caseObj.caseIgnorePaths : ""
+        old_prefix: document.getElementById('oldPrefix').value,
+        new_prefix: document.getElementById('newPrefix').value,
+        uri: caseObj.uri,
+        method: caseObj.method,
+        // 分别发送两套 Headers
+        old_headers: JSON.stringify(oldHeadersMerged),
+        new_headers: JSON.stringify(newHeadersMerged),
+        payload: scenarioObj.payload,
+        payload_new: scenarioObj.payloadNew || "",
+        is_diff_payload: scenarioObj.isDiffPayload || false,
+        ignore_paths: document.getElementById('ignorePaths').value,
+        case_ignore_paths: caseObj.isCaseIgnore ? caseObj.caseIgnorePaths : ""
     };
     try { const res = await fetch('/api/compare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); return await res.json(); } catch (e) { return { status: 'error', message: e.message }; }
 }
@@ -249,21 +280,12 @@ async function runBatch() {
     document.getElementById('runCaseBtn').disabled = false; renderCaseList(); saveWorkspaceToServer(false);
 }
 
-// 🌟 解析、保存持久化原始数据，并按需渲染
 function processAndSaveResult(scen, resultData) {
-    // 写入持久化模型
     scen.lastResult = resultData;
-
-    if (resultData.status === "error") { scen.lastStatus = 'error'; }
-    else { scen.lastStatus = (typeof resultData.diff_result === 'string') ? 'success' : 'error'; }
-
-    // 如果当前活动的正好是这个场景，立刻渲染视图
-    if (appState.activeScenarioId === scen.id) {
-        renderResult(resultData);
-    }
+    if (resultData.status === "error") { scen.lastStatus = 'error'; } else { scen.lastStatus = (typeof resultData.diff_result === 'string') ? 'success' : 'error'; }
+    if (appState.activeScenarioId === scen.id) { renderResult(resultData); }
 }
 
-// 纯渲染函数 (负责根据原始 JSON 吐出 HTML)
 function renderResult(data) {
     const badge = document.getElementById('statusBadge');
     if (data.status === "error") {
@@ -318,3 +340,16 @@ function renderUnifiedGitDiff(ndiffLines) {
     }
     return html;
 }
+
+// 🌟 鉴权配置折叠/展开逻辑
+window.toggleGlobalAuth = function() {
+    const section = document.getElementById('globalAuthSection');
+    const btn = document.getElementById('authToggleBtn');
+    if (section.style.display === 'none') {
+        section.style.display = 'flex';
+        btn.innerText = '🔑 收起鉴权配置';
+    } else {
+        section.style.display = 'none';
+        btn.innerText = '🔑 展开鉴权配置';
+    }
+};
